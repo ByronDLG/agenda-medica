@@ -1,0 +1,9 @@
+Completé la gestión de citas por Secretaría:
+
+Los administradores pueden asignar y revocar agendas; los cambios quedan auditados.
+Secretaría puede consultar y coordinar únicamente agendas asignadas: crear, confirmar, rechazar y cancelar citas. No puede marcarlas atendidas ni como inasistencia; el servidor también aplica esa restricción.
+Añadí pruebas de aislamiento por organización, agenda y actor, además de pruebas para la interfaz de administración y el flujo de citas.
+Actualicé la documentación en README.md y especificacion.md.
+Validación: build web correcto; 14 pruebas web y 38 pruebas API aprobadas. EF no detecta cambios pendientes al modelo. La migración se aplicó a LocalDB de desarrollo y la prueba de integración verificó aplicar, revertir y reaplicar migraciones.
+
+Los cambios principales están en home-page.html, AppointmentsController.cs y AppointmentBookingIntegrationTests.cs. Esta versión sigue siendo solo para desarrollo con datos ficticios.
