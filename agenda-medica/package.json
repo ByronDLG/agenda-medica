@@ -1,0 +1,19 @@
+{
+  "name": "agenda-medica",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "npm@11.21.2",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev:web": "npm --prefix apps/web run start",
+    "dev:api": "dotnet run --project apps/api/AgendaMedica.Api.csproj",
+    "build:web": "npm --prefix apps/web run build",
+    "build:api": "dotnet build apps/api/AgendaMedica.Api.csproj",
+    "test:web": "npm --prefix apps/web run test -- --watch=false",
+    "test:api": "dotnet test apps/api.Tests/AgendaMedica.Api.Tests.csproj",
+    "bootstrap:admin": "dotnet run --project apps/api/AgendaMedica.Api.csproj -- --bootstrap-admin",
+    "database:migrate": "dotnet tool run dotnet-ef database update --project apps/api/AgendaMedica.Api.csproj --startup-project apps/api/AgendaMedica.Api.csproj"
+  }
+}

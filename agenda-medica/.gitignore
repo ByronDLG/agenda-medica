@@ -1,0 +1,12 @@
+node_modules/
+**/node_modules/
+dist/
+coverage/
+**/bin/
+**/obj/
+.vs/
+.angular/
+.env
+.env.*
+!.env.example
+npm-debug.log*

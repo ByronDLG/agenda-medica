@@ -1,0 +1,160 @@
+<main class="flex min-h-screen items-center justify-center bg-stone-50 px-4 py-10 text-slate-900">
+  <section class="w-full max-w-2xl rounded-2xl border border-stone-200 bg-white p-6 shadow-sm sm:p-9" aria-labelledby="public-booking-title">
+    <a class="flex items-center gap-3 text-slate-900 no-underline" href="/" aria-label="Agenda Médica, inicio">
+      <span class="flex size-10 items-center justify-center rounded-xl bg-teal-800 text-white" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" class="size-6">
+          <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+        </svg>
+      </span>
+      <span class="text-sm font-bold tracking-tight">Agenda Médica</span>
+    </a>
+
+    <div class="mt-8">
+      <p class="text-sm font-semibold text-teal-800">Solicitud de cita</p>
+      <h1 id="public-booking-title" class="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+        @if (availability(); as result) {
+          {{ result.organizationName }}
+        } @else {
+          Reserva en línea
+        }
+      </h1>
+      <p class="mt-3 text-sm leading-6 text-slate-600">Elige un inicio disponible y deja un medio de contacto. No escribas diagnósticos ni motivos de consulta.</p>
+
+      @if (state() === 'loading') {
+        <p class="mt-6 text-sm text-slate-600" role="status">Consultando horarios…</p>
+      } @else if (state() === 'error') {
+        <p class="mt-6 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm leading-6 text-rose-900" role="alert">{{ errorMessage() }}</p>
+        @if (canRetry()) {
+          <button
+            class="mt-4 min-h-11 rounded-xl border border-teal-800 px-4 py-2.5 text-sm font-semibold text-teal-900 hover:bg-teal-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-800"
+            type="button"
+            (click)="retry()"
+          >
+            Reintentar
+          </button>
+        }
+      } @else if (state() === 'success') {
+        @if (confirmation(); as result) {
+          <div class="mt-6 rounded-xl border border-teal-200 bg-teal-50 p-5" role="status">
+            <h2 class="font-semibold text-teal-950">
+              {{ result.status === 'Confirmed' ? 'Tu cita está confirmada' : 'Tu solicitud fue enviada' }}
+            </h2>
+            <p class="mt-2 text-sm leading-6 text-teal-950">
+              {{ result.localDate }} · {{ result.startTime }} ({{ availability()?.timeZoneId }})
+            </p>
+            @if (result.status === 'Requested') {
+              <p class="mt-2 text-sm leading-6 text-teal-900">El consultorio debe revisar la solicitud. No es una cita confirmada.</p>
+            }
+          </div>
+        }
+      } @else if (availability(); as result) {
+        @if (availableDates().length === 0) {
+          <p class="mt-6 rounded-xl border border-stone-200 bg-stone-50 p-4 text-sm leading-6 text-slate-700" role="status">No hay horarios disponibles para los próximos días. Contacta directamente con el consultorio.</p>
+        } @else {
+          <p class="mt-3 text-sm text-slate-600">Duración aproximada: {{ result.appointmentDurationMinutes }} minutos. Zona horaria: {{ result.timeZoneId }}.</p>
+          @if (errorMessage()) {
+            <p class="mt-5 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900" role="alert">{{ errorMessage() }}</p>
+          }
+          <form class="mt-6 grid gap-5 sm:grid-cols-2" (submit)="submit($event)">
+            <div>
+              <label class="block text-sm font-medium text-slate-800" for="publicAppointmentDate">Fecha disponible</label>
+              <select
+                class="mt-2 min-h-11 w-full rounded-xl border border-stone-300 bg-white px-3 text-base text-slate-900 outline-none focus:border-teal-800 focus:ring-2 focus:ring-teal-800/20"
+                id="publicAppointmentDate"
+                name="appointmentDate"
+                required
+                [value]="selectedDate()"
+                [disabled]="state() === 'submitting'"
+                (change)="updateDate($event)"
+              >
+                @for (date of availableDates(); track date) {
+                  <option [value]="date">{{ dayLabel(date) }}</option>
+                }
+              </select>
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-800" for="publicAppointmentTime">Hora disponible</label>
+              <select
+                class="mt-2 min-h-11 w-full rounded-xl border border-stone-300 bg-white px-3 text-base text-slate-900 outline-none focus:border-teal-800 focus:ring-2 focus:ring-teal-800/20"
+                id="publicAppointmentTime"
+                name="appointmentStartTime"
+                required
+                [value]="selectedStartTime()"
+                [disabled]="state() === 'submitting'"
+                (change)="updateStartTime($event)"
+              >
+                @for (slot of slotsForSelectedDate(); track slot.startTime) {
+                  <option [value]="slot.startTime">{{ slot.startTime }}–{{ slot.endTime }}</option>
+                }
+              </select>
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-800" for="publicPatientName">Nombre</label>
+              <input
+                class="mt-2 min-h-11 w-full rounded-xl border border-stone-300 px-3 text-base text-slate-900 outline-none focus:border-teal-800 focus:ring-2 focus:ring-teal-800/20"
+                id="publicPatientName"
+                name="patientName"
+                type="text"
+                autocomplete="name"
+                required
+                maxlength="120"
+                [disabled]="state() === 'submitting'"
+                (input)="invalidateIdempotencyKey()"
+              >
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-800" for="publicContactEmail">Correo <span class="font-normal text-slate-500">(opcional)</span></label>
+              <input
+                class="mt-2 min-h-11 w-full rounded-xl border border-stone-300 px-3 text-base text-slate-900 outline-none focus:border-teal-800 focus:ring-2 focus:ring-teal-800/20"
+                id="publicContactEmail"
+                name="contactEmail"
+                type="email"
+                autocomplete="email"
+                maxlength="254"
+                [disabled]="state() === 'submitting'"
+                (input)="invalidateIdempotencyKey()"
+              >
+            </div>
+            <div class="sm:col-span-2">
+              <label class="block text-sm font-medium text-slate-800" for="publicContactPhone">Teléfono <span class="font-normal text-slate-500">(opcional)</span></label>
+              <input
+                class="mt-2 min-h-11 w-full rounded-xl border border-stone-300 px-3 text-base text-slate-900 outline-none focus:border-teal-800 focus:ring-2 focus:ring-teal-800/20 sm:max-w-md"
+                id="publicContactPhone"
+                name="contactPhone"
+                type="tel"
+                autocomplete="tel"
+                maxlength="32"
+                [disabled]="state() === 'submitting'"
+                (input)="invalidateIdempotencyKey()"
+              >
+            </div>
+            <fieldset class="rounded-xl border border-stone-200 p-4 sm:col-span-2">
+              <legend class="px-1 text-sm font-semibold text-slate-800">Consentimiento de contacto</legend>
+              <label class="flex items-start gap-3 text-sm leading-6 text-slate-700">
+                <input
+                  class="mt-1 size-4 shrink-0 accent-teal-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-800"
+                  name="contactConsent"
+                  type="checkbox"
+                  required
+                  [disabled]="state() === 'submitting'"
+                  (change)="invalidateIdempotencyKey()"
+                >
+                <span>Autorizo guardar estos datos para coordinar esta cita.</span>
+              </label>
+            </fieldset>
+            <p class="text-xs leading-5 text-slate-500 sm:col-span-2">Usa datos ficticios en este entorno de desarrollo. Tus datos de contacto solo se comparten con el profesional responsable de esta agenda.</p>
+            <div class="sm:col-span-2">
+              <button
+                class="min-h-11 w-full rounded-xl bg-teal-800 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-teal-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-800 disabled:cursor-wait disabled:opacity-60 sm:w-auto"
+                type="submit"
+                [disabled]="state() === 'submitting' || slotsForSelectedDate().length === 0"
+              >
+                {{ state() === 'submitting' ? 'Enviando solicitud…' : 'Solicitar cita' }}
+              </button>
+            </div>
+          </form>
+        }
+      }
+    </div>
+  </section>
+</main>
