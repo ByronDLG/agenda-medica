@@ -168,6 +168,7 @@ public sealed class AppointmentBookingService(
             return AppointmentBookingResult.Failed(AppointmentBookingError.SlotUnavailable);
         }
 
+        var nowUtc = timeProvider.GetUtcNow();
         var appointment = Appointment.Create(
             organizationId,
             practitionerUserId,
@@ -181,7 +182,7 @@ public sealed class AppointmentBookingService(
             membership.PreparationBufferMinutes,
             AppointmentConfirmationPolicy.GetInitialStatus(
                 organization.AppointmentConfirmationMode),
-            timeProvider.GetUtcNow());
+            nowUtc);
 
         var hasConflict = await database.Appointments.AnyAsync(
             item => item.OrganizationId == organizationId &&
@@ -197,13 +198,24 @@ public sealed class AppointmentBookingService(
         }
 
         database.Appointments.Add(appointment);
-        database.AppointmentAuditEvents.Add(AppointmentAuditEvent.Create(
+        var auditEvent = AppointmentAuditEvent.Create(
             organizationId,
             appointment.Id,
             actorUserId ?? practitionerUserId,
             previousStatus: null,
             newStatus: appointment.Status,
-            changedAtUtc: timeProvider.GetUtcNow()));
+            changedAtUtc: nowUtc);
+        database.AppointmentAuditEvents.Add(auditEvent);
+        var practitionerEmail = await database.Users
+            .Where(item => item.Id == practitionerUserId)
+            .Select(item => item.Email)
+            .SingleOrDefaultAsync(cancellationToken);
+        database.AppointmentNotificationOutboxMessages.AddRange(
+            AppointmentNotificationOutboxMessage.CreateForEvent(
+                appointment,
+                auditEvent,
+                practitionerEmail,
+                nowUtc));
         await database.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return AppointmentBookingResult.Succeeded(appointment);

@@ -28,6 +28,9 @@ public sealed class AgendaDbContext(DbContextOptions<AgendaDbContext> options)
 
     public DbSet<AppointmentAuditEvent> AppointmentAuditEvents => Set<AppointmentAuditEvent>();
 
+    public DbSet<AppointmentNotificationOutboxMessage> AppointmentNotificationOutboxMessages =>
+        Set<AppointmentNotificationOutboxMessage>();
+
     public DbSet<PublicBookingLink> PublicBookingLinks => Set<PublicBookingLink>();
 
     public DbSet<SecretaryPractitionerAssignment> SecretaryPractitionerAssignments =>
@@ -276,6 +279,7 @@ public sealed class AgendaDbContext(DbContextOptions<AgendaDbContext> options)
             item.AppointmentId,
             item.ChangedAtUtc,
         });
+        appointmentAudit.HasAlternateKey(item => new { item.OrganizationId, item.Id });
         appointmentAudit.HasOne<Appointment>()
             .WithMany()
             .HasForeignKey(item => new { item.OrganizationId, item.AppointmentId })
@@ -285,6 +289,73 @@ public sealed class AgendaDbContext(DbContextOptions<AgendaDbContext> options)
             .WithMany()
             .HasForeignKey(item => new { item.OrganizationId, UserId = item.ActorUserId })
             .HasPrincipalKey(item => new { item.OrganizationId, item.UserId })
+            .OnDelete(DeleteBehavior.Restrict);
+
+        var appointmentNotification =
+            modelBuilder.Entity<AppointmentNotificationOutboxMessage>();
+        appointmentNotification.ToTable(
+            "AppointmentNotificationOutboxMessages",
+            table =>
+            {
+                table.HasCheckConstraint(
+                    "CK_AppointmentNotificationOutboxMessages_Recipient",
+                    "[Recipient] IN ('Patient', 'Practitioner')");
+                table.HasCheckConstraint(
+                    "CK_AppointmentNotificationOutboxMessages_Status",
+                    "[Status] IN ('Pending', 'Processing', 'Delivered', 'Failed', 'Skipped')");
+                table.HasCheckConstraint(
+                    "CK_AppointmentNotificationOutboxMessages_AttemptCount",
+                    "[AttemptCount] BETWEEN 0 AND 5");
+                table.HasCheckConstraint(
+                    "CK_AppointmentNotificationOutboxMessages_Kind",
+                    "[Kind] IN ('EventUpdate', 'Reminder24Hours')");
+            });
+        appointmentNotification.HasKey(item => item.Id);
+        appointmentNotification.Property(item => item.Id)
+            .HasDefaultValueSql("NEWSEQUENTIALID()");
+        appointmentNotification.Property(item => item.Recipient)
+            .HasConversion<string>()
+            .HasMaxLength(16)
+            .IsRequired();
+        appointmentNotification.Property(item => item.Kind)
+            .HasConversion<string>()
+            .HasMaxLength(24)
+            .IsRequired();
+        appointmentNotification.Property(item => item.RecipientAddress)
+            .HasMaxLength(254)
+            .IsRequired();
+        appointmentNotification.Property(item => item.RecipientName)
+            .HasMaxLength(120);
+        appointmentNotification.Property(item => item.Status)
+            .HasConversion<string>()
+            .HasMaxLength(16)
+            .IsRequired();
+        appointmentNotification.Property(item => item.LastFailureCode)
+            .HasMaxLength(64);
+        appointmentNotification.Property(item => item.Version)
+            .IsRowVersion();
+        appointmentNotification.HasIndex(item => new
+            {
+                item.AuditEventId,
+                item.Kind,
+                item.Recipient,
+            })
+            .IsUnique();
+        appointmentNotification.HasIndex(item => new
+        {
+            item.Status,
+            item.NextAttemptAtUtc,
+            item.CreatedAtUtc,
+        });
+        appointmentNotification.HasOne<Appointment>()
+            .WithMany()
+            .HasForeignKey(item => new { item.OrganizationId, item.AppointmentId })
+            .HasPrincipalKey(item => new { item.OrganizationId, item.Id })
+            .OnDelete(DeleteBehavior.Restrict);
+        appointmentNotification.HasOne<AppointmentAuditEvent>()
+            .WithMany()
+            .HasForeignKey(item => new { item.OrganizationId, item.AuditEventId })
+            .HasPrincipalKey(item => new { item.OrganizationId, item.Id })
             .OnDelete(DeleteBehavior.Restrict);
 
         var publicBookingLink = modelBuilder.Entity<PublicBookingLink>();

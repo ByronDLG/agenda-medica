@@ -22,9 +22,12 @@ preferencias de duracion, citas internas, reservas por enlace directo privado y
 gestion de citas por Secretaria para agendas asignadas explicitamente. El
 administrador puede conceder y revocar asignaciones, que quedan auditadas. La
 Secretaria puede consultar, crear, confirmar, rechazar y cancelar citas; no
-puede marcar atenciones ni inasistencias. El directorio publico, notificaciones,
-MFA y el perfil reutilizable de paciente siguen pendientes. LocalDB y los datos
-de pruebas son solo para desarrollo; no usar con pacientes reales.
+puede marcar atenciones ni inasistencias. El directorio publico, MFA y el perfil
+reutilizable de paciente siguen pendientes. Las notificaciones transaccionales
+por correo se encolan con la reserva y sus cambios de estado; se programa un
+recordatorio neutral 24 horas antes cuando el paciente dio su correo y acepto
+recibir avisos. LocalDB y los datos de pruebas son solo para desarrollo; no usar
+con pacientes reales.
 
 ## 2. Objetivo y propuesta de valor
 
@@ -96,7 +99,8 @@ Aplicar **minimo privilegio**: el alcance de cada solicitud debe estar limitado 
 1. El paciente selecciona profesional, tipo de cita y horario disponible.
 2. El sistema valida disponibilidad y politica de confirmacion.
 3. La solicitud queda confirmada o pendiente de aprobacion, segun la configuracion.
-4. Se informa el resultado al paciente y al profesional.
+4. Se encolan avisos operativos por correo para el paciente (si acepto y dio su
+   correo) y para el profesional (si su cuenta tiene correo).
 5. Se envian recordatorios consentidos; el paciente confirma, cancela o solicita reprogramacion.
 6. El profesional marca la cita atendida o como inasistencia.
 
@@ -105,7 +109,7 @@ Aplicar **minimo privilegio**: el alcance de cada solicitud debe estar limitado 
 1. La solicitud publica entra a la agenda del profesional como pendiente o confirmada.
 2. El administrador asigna a la secretaria solo las agendas que puede gestionar.
 3. La secretaria confirma o rechaza solicitudes de esas agendas.
-4. Paciente y profesional reciben el cambio correspondiente.
+4. El sistema encola un aviso de correo con el cambio, sin datos clinicos.
 5. La secretaria puede registrar una cita solicitada por telefono y cancelar citas;
    no puede marcar atenciones ni inasistencias.
 6. El profesional conserva el control de su disponibilidad; la secretaria no ve
@@ -123,7 +127,10 @@ Una cita ocupa un intervalo semiabierto `[inicio, fin)`, con duracion y posibles
 - No borrar fisicamente una cita confirmada para corregir historial; cancelar y auditar.
 - La politica de cancelacion/reprogramacion es configurable por organizacion y debe comunicarse antes de confirmar.
 - Al cancelar o reprogramar, liberar el horario anterior y no enviar mensajes duplicados.
-- Reintentos de recordatorio deben ser idempotentes. Una tarea tardia no debe notificar citas canceladas.
+- Los avisos operativos de creacion y cambio de estado se guardan en una cola transaccional con clave unica por evento y destinatario. Solo se envia correo si hay direccion y consentimiento; nunca incluye datos clinicos.
+- Los envios fallidos se reintentan con demora creciente hasta cinco intentos y quedan en estado terminal auditable. El error no revierte la cita; un fallo despues de la aceptacion SMTP y antes de guardar el acuse puede causar reenvio.
+- Si el paciente proporciono correo y acepto avisos, se programa un recordatorio neutral 24 horas antes de la cita. Antes de enviar, se verifica que la cita siga activa y no haya comenzado; una cancelacion, rechazo u otro cambio a estado inactivo omite el recordatorio y limpia los datos del destinatario. Tambien se omiten avisos de estado que quedaron obsoletos por un cambio posterior.
+- No enviar al paciente correos sobre atenciones o inasistencias. SMS y WhatsApp no estan habilitados.
 - Evitar revelar si una persona es paciente de una clinica en respuestas publicas.
 - Datos minimos del paciente para coordinar: nombre, medio de contacto y preferencias/consentimiento de notificacion; solicitar identificadores o datos clinicos solo si existe necesidad documentada.
 
@@ -136,7 +143,7 @@ Una cita ocupa un intervalo semiabierto `[inicio, fin)`, con duracion y posibles
 - **Backend:** ASP.NET Core Web API sobre .NET 10 LTS, API REST versionada y contrato OpenAPI.
 - **Persistencia:** Microsoft SQL Server con Entity Framework Core y migraciones versionadas. No exponer credenciales de base de datos al navegador.
 - **Autenticacion:** ASP.NET Core Identity con cookies HttpOnly y antifalsificacion para la API; primer administrador creado por comando local de un solo uso y cuentas posteriores por invitacion, sin registro publico. Preparar MFA antes de cualquier piloto con datos reales.
-- **Tareas asincronas:** cola/cron idempotente para recordatorios, separado de las peticiones web.
+- **Tareas asincronas:** outbox transaccional e idempotente para avisos y recordatorios, separado de las peticiones web.
 - **Pruebas:** unitarias, integracion con SQL Server y E2E para flujos criticos.
 
 ### Limites de componentes
@@ -296,7 +303,9 @@ Los limites y precios cambian. Lo siguiente es una fotografia de paginas oficial
 4. Crear design tokens, navegacion responsive y estados principales con datos ficticios.
 5. Implementar disponibilidad y reservas atomicas; probar solicitudes concurrentes y cambios de zona horaria.
 6. Implementar gestion de citas, agenda y accesos de secretaria.
-7. Agregar notificaciones neutrales con consentimiento, idempotencia, registro de entrega y opt-out.
+7. Implementar notificaciones transaccionales neutrales con consentimiento,
+   idempotencia, registro de entrega y recordatorio de 24 horas; completar
+   opt-out configurable.
 8. Ejecutar pruebas de accesibilidad, seguridad, respaldo/restauracion y flujos E2E.
 9. Hacer piloto controlado sin expediente clinico; revisar metricas y costos.
 10. Evaluar Calendar, WhatsApp, pagos y expediente en decisiones separadas con analisis de costo/riesgo.
@@ -311,7 +320,7 @@ Los limites y precios cambian. Lo siguiente es una fotografia de paginas oficial
   no puede marcarlas atendidas ni como inasistencia. El registro identifica al
   actor y cada concesion/revocacion de acceso queda auditada.
 - Medico puede confirmar, rechazar, cancelar, reprogramar y cerrar una cita; el sistema guarda actor y cambios.
-- La confirmacion y cancelacion comunican el estado correcto; un reintento no duplica la cita ni el mensaje.
+- La confirmacion y cancelacion encolan avisos neutrales con el estado del evento; una clave unica evita duplicar la fila. El correo usa semantica de mejor esfuerzo y puede reenviarse si el proveedor acepto el mensaje antes de un fallo local.
 - La zona horaria se muestra de forma coherente alrededor de cambios de fecha y conversion UTC/local.
 - Pruebas demuestran que un usuario no puede leer ni modificar datos de otra organizacion.
 - El flujo principal funciona con teclado y en viewport movil; errores, carga, vacio y exito tienen estados visibles.

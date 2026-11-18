@@ -145,6 +145,94 @@ namespace AgendaMedica.Api.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("AgendaMedica.Api.Domain.Appointments.AppointmentNotificationOutboxMessage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier")
+                        .HasDefaultValueSql("NEWSEQUENTIALID()");
+
+                    b.Property<Guid>("AppointmentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("AttemptCount")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("AuditEventId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset?>("DeliveredAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("nvarchar(24)");
+
+                    b.Property<DateTimeOffset?>("LastAttemptAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("LastFailureCode")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTimeOffset>("NextAttemptAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid>("OrganizationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Recipient")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)");
+
+                    b.Property<string>("RecipientAddress")
+                        .IsRequired()
+                        .HasMaxLength(254)
+                        .HasColumnType("nvarchar(254)");
+
+                    b.Property<string>("RecipientName")
+                        .HasMaxLength(120)
+                        .HasColumnType("nvarchar(120)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)");
+
+                    b.Property<byte[]>("Version")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrganizationId", "AppointmentId");
+
+                    b.HasIndex("OrganizationId", "AuditEventId");
+
+                    b.HasIndex("AuditEventId", "Kind", "Recipient")
+                        .IsUnique();
+
+                    b.HasIndex("Status", "NextAttemptAtUtc", "CreatedAtUtc");
+
+                    b.ToTable("AppointmentNotificationOutboxMessages", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_AppointmentNotificationOutboxMessages_AttemptCount", "[AttemptCount] BETWEEN 0 AND 5");
+
+                            t.HasCheckConstraint("CK_AppointmentNotificationOutboxMessages_Kind", "[Kind] IN ('EventUpdate', 'Reminder24Hours')");
+
+                            t.HasCheckConstraint("CK_AppointmentNotificationOutboxMessages_Recipient", "[Recipient] IN ('Patient', 'Practitioner')");
+
+                            t.HasCheckConstraint("CK_AppointmentNotificationOutboxMessages_Status", "[Status] IN ('Pending', 'Processing', 'Delivered', 'Failed', 'Skipped')");
+                        });
+                });
+
             modelBuilder.Entity("AgendaMedica.Api.Domain.Appointments.PublicBookingLink", b =>
                 {
                     b.Property<Guid>("OrganizationId")
@@ -639,6 +727,23 @@ namespace AgendaMedica.Api.Data.Migrations
                     b.HasOne("AgendaMedica.Api.Domain.Appointments.Appointment", null)
                         .WithMany()
                         .HasForeignKey("OrganizationId", "AppointmentId")
+                        .HasPrincipalKey("OrganizationId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("AgendaMedica.Api.Domain.Appointments.AppointmentNotificationOutboxMessage", b =>
+                {
+                    b.HasOne("AgendaMedica.Api.Domain.Appointments.Appointment", null)
+                        .WithMany()
+                        .HasForeignKey("OrganizationId", "AppointmentId")
+                        .HasPrincipalKey("OrganizationId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("AgendaMedica.Api.Domain.Appointments.AppointmentAuditEvent", null)
+                        .WithMany()
+                        .HasForeignKey("OrganizationId", "AuditEventId")
                         .HasPrincipalKey("OrganizationId", "Id")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();

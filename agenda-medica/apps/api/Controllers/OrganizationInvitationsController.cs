@@ -156,11 +156,12 @@ public sealed class OrganizationInvitationsController(
                     invitationUri),
                 cancellationToken);
         }
-        catch (EmailDeliveryException)
+        catch (EmailDeliveryException exception)
         {
             logger.LogWarning(
-                "Email delivery failed for invitation {InvitationId}.",
-                invitation.Id);
+                "Email delivery failed for invitation {InvitationId} with code {FailureCode}.",
+                invitation.Id,
+                exception.FailureCode);
             return StatusCode(
                 StatusCodes.Status502BadGateway,
                 new

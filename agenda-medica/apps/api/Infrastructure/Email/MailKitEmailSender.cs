@@ -21,14 +21,18 @@ public sealed class MailKitEmailSender(IOptions<SmtpEmailOptions> options) : IEm
         var smtpOptions = options.Value;
         if (!smtpOptions.Enabled)
         {
-            throw new InvalidOperationException(
-                "SMTP email delivery is disabled. Configure Email:Smtp through a secret provider.");
+            throw new EmailDeliveryException("smtp-disabled");
         }
 
         var email = new MimeMessage();
         email.From.Add(new MailboxAddress(smtpOptions.FromName, smtpOptions.FromAddress));
         email.To.Add(new MailboxAddress(message.RecipientName ?? string.Empty, message.RecipientAddress));
         email.Subject = message.Subject;
+        if (!string.IsNullOrWhiteSpace(message.MessageId))
+        {
+            email.MessageId = message.MessageId;
+        }
+
         email.Body = new BodyBuilder
         {
             TextBody = message.TextBody,

@@ -61,8 +61,8 @@ asignación quedan auditados y cada operación de cita registra a su actor real.
 No ingreses datos reales: la base LocalDB es únicamente de desarrollo.
 
 Todavía no existen perfiles de paciente reutilizables, reprogramación,
-notificaciones, auditoría de accesos/horarios ni MFA. No se debe usar esta
-versión con pacientes reales.
+historial de entrega visible en la interfaz, auditoría de accesos/horarios ni
+MFA. No se debe usar esta versión con pacientes reales.
 
 La configuracion local usa SQL Server LocalDB y autenticacion integrada de
 Windows. Para otros entornos, proporciona el secreto
@@ -141,7 +141,24 @@ encabezado `Idempotency-Key` debe contener un UUID y se reutiliza sin cambios
 cuando se reintenta la misma solicitud. La Secretaría puede confirmar,
 rechazar o cancelar; solo el profesional puede marcar atendida o inasistencia.
 El historial de auditoría identifica a la persona de Secretaría que realizó la
-acción.
+acción. Al guardar la cita o un cambio de estado, la API registra notificaciones
+de correo en la misma transacción; un fallo de correo no cancela ni revierte la
+cita. El trabajador en segundo plano envía mensajes operativos neutrales al
+correo del paciente (solo si fue proporcionado y se aceptó el consentimiento) y
+al profesional cuando tiene correo configurado. No incluye datos clínicos ni
+envía al paciente avisos de atención o inasistencia. El estado de entrega se
+persiste y se reintenta hasta cinco veces con demoras crecientes; las fallas
+terminales quedan registradas y se escriben en el log sin direcciones ni otros
+datos personales. Tras entrega o falla terminal, la cola elimina la copia de
+correo y nombre del destinatario. SMTP está deshabilitado por defecto; los
+valores deben configurarse localmente con User Secrets para probar el envío.
+Si el paciente proporcionó un correo y aceptó los avisos, se programa además
+un recordatorio neutral 24 horas antes; el trabajador omite recordatorios
+cuando la cita ya está cancelada, rechazada, atendida, vencida o en otro estado
+inactivo. Los avisos de estado que hayan quedado obsoletos también se omiten.
+La fila de cola es única por evento de auditoría y destinatario, pero SMTP es
+un transporte de mejor esfuerzo: una caída después de que el proveedor acepta
+el mensaje y antes de registrar la entrega puede causar un reenvío al recuperar.
 
 - `GET /api/v1/organizations/{organizationId}/appointments/practitioners` (profesional: su propia agenda; Secretaría: agendas autorizadas)
 - `GET /api/v1/organizations/{organizationId}/appointments` (citas activas de los últimos y próximos 31 días)
@@ -175,13 +192,18 @@ confirmación automática. Los estados que siguen ocupando el horario son
 únicas de idempotencia, restricciones de dominio e índices.
 La migración `SecretaryAgendaAssignments` añade las asignaciones explícitas y
 la auditoría de sus concesiones y revocaciones.
+La migración `AppointmentNotificationOutbox` crea la cola transaccional de correo.
+La migración `AppointmentReminders` añade los tipos y estados para recordatorios
+programados y avisos omitidos.
 
 ## Correo saliente
 
 La API usa MailKit (licencia MIT) para SMTP; la biblioteca es gratuita, pero el
 proveedor de correo puede cobrar o limitar el envío. El envío está deshabilitado
-por defecto y no se almacena ninguna credencial SMTP en SQL Server. En
-desarrollo, guarda los valores localmente en .NET User Secrets:
+por defecto y no se almacena ninguna credencial SMTP en SQL Server. Las
+notificaciones de citas requieren SMTP habilitado; si no está configurado, la
+cola conserva el estado de error y registra los reintentos, sin afectar la cita.
+En desarrollo, guarda los valores localmente en .NET User Secrets:
 
 ```powershell
 dotnet user-secrets set "Email:Smtp:Enabled" "true" --project apps/api/AgendaMedica.Api.csproj

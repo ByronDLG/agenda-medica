@@ -25,8 +25,10 @@ builder.Services.AddOptions<SmtpEmailOptions>()
     .ValidateOnStart();
 builder.Services.AddTransient<IEmailSender, MailKitEmailSender>();
 builder.Services.AddScoped<AppointmentBookingService>();
+builder.Services.AddScoped<AppointmentNotificationProcessor>();
 builder.Services.AddScoped<PublicBookingAvailabilityService>();
 builder.Services.AddScoped<PractitionerAgendaAccessService>();
+builder.Services.AddHostedService<AppointmentNotificationBackgroundService>();
 builder.Services
     .AddIdentityCore<ApplicationUser>(options =>
     {

@@ -5,4 +5,5 @@ public sealed record EmailMessage(
     string Subject,
     string TextBody,
     string? HtmlBody = null,
-    string? RecipientName = null);
+    string? RecipientName = null,
+    string? MessageId = null);

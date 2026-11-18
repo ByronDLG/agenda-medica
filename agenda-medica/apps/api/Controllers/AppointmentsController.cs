@@ -357,13 +357,25 @@ public sealed class AppointmentsController(
 
         var previousStatus = appointment.Status;
         appointment.ChangeStatus(status);
-        database.AppointmentAuditEvents.Add(AppointmentAuditEvent.Create(
+        var nowUtc = timeProvider.GetUtcNow();
+        var auditEvent = AppointmentAuditEvent.Create(
             organizationId,
             appointment.Id,
             userId,
             previousStatus,
             status,
-            timeProvider.GetUtcNow()));
+            nowUtc);
+        database.AppointmentAuditEvents.Add(auditEvent);
+        var practitionerEmail = await database.Users
+            .Where(item => item.Id == targetPractitionerId.Value)
+            .Select(item => item.Email)
+            .SingleOrDefaultAsync(cancellationToken);
+        database.AppointmentNotificationOutboxMessages.AddRange(
+            AppointmentNotificationOutboxMessage.CreateForEvent(
+                appointment,
+                auditEvent,
+                practitionerEmail,
+                nowUtc));
         try
         {
             await database.SaveChangesAsync(cancellationToken);

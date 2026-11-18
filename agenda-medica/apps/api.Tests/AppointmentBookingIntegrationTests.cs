@@ -5,10 +5,12 @@ using AgendaMedica.Api.Domain.Identity;
 using AgendaMedica.Api.Domain.Organizations;
 using AgendaMedica.Api.Domain.Schedules;
 using AgendaMedica.Api.Infrastructure.Appointments;
+using AgendaMedica.Api.Infrastructure.Email;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace AgendaMedica.Api.Tests;
 
@@ -58,6 +60,7 @@ public sealed class AppointmentBookingIntegrationTests
             var practitioner = new ApplicationUser
             {
                 Id = Guid.NewGuid(),
+                Email = $"practitioner-{Guid.NewGuid():N}@example.test",
                 UserName = $"practitioner-{Guid.NewGuid():N}@example.test",
             };
             var otherPractitioner = new ApplicationUser
@@ -224,6 +227,7 @@ public sealed class AppointmentBookingIntegrationTests
                 authorizedSecretaryUserId: secretary.Id);
             Assert.Equal(AppointmentBookingError.None, secretaryBooking.Error);
             Assert.NotNull(secretaryBooking.Appointment);
+            var secretaryAppointmentId = secretaryBooking.Appointment.Id;
 
             var unassignedBooking = await BookAsync(
                 options,
@@ -242,6 +246,189 @@ public sealed class AppointmentBookingIntegrationTests
                 var audit = await database.AppointmentAuditEvents.SingleAsync(
                     item => item.AppointmentId == secretaryBooking.Appointment!.Id);
                 Assert.Equal(secretary.Id, audit.ActorUserId);
+                Assert.Equal(
+                    3,
+                    await database.AppointmentNotificationOutboxMessages.CountAsync(
+                        item => item.AppointmentId == secretaryAppointmentId));
+                Assert.Single(
+                    await database.AppointmentNotificationOutboxMessages
+                        .Where(item =>
+                            item.AppointmentId == secretaryAppointmentId &&
+                            item.Kind == AppointmentNotificationKind.Reminder24Hours)
+                        .ToArrayAsync());
+            }
+
+            var emailSender = new RecordingEmailSender();
+            await using (var database = new AgendaDbContext(options))
+            {
+                var processor = new AppointmentNotificationProcessor(
+                    database,
+                    emailSender,
+                    TimeProvider.System,
+                    NullLogger<AppointmentNotificationProcessor>.Instance);
+                Assert.True(await processor.ProcessNextAsync(CancellationToken.None));
+                Assert.True(await processor.ProcessNextAsync(CancellationToken.None));
+                Assert.False(await processor.ProcessNextAsync(CancellationToken.None));
+            }
+
+            Assert.Equal(2, emailSender.Messages.Count);
+            Assert.Contains(
+                emailSender.Messages,
+                message => message.RecipientAddress == "persona@example.test" &&
+                    message.TextBody.Contains("Persona de prueba", StringComparison.Ordinal));
+            Assert.Contains(
+                emailSender.Messages,
+                message => message.RecipientAddress == practitioner.Email &&
+                    !message.TextBody.Contains("Persona de prueba", StringComparison.Ordinal));
+            Assert.All(
+                emailSender.Messages,
+                message => Assert.Contains("@agenda-medica.local", message.MessageId!));
+
+            await using (var database = new AgendaDbContext(options))
+            {
+                var deliveredMessages = await database.AppointmentNotificationOutboxMessages
+                    .Where(item =>
+                        item.AppointmentId == secretaryAppointmentId &&
+                        item.Kind == AppointmentNotificationKind.EventUpdate &&
+                        item.Status == AppointmentNotificationDeliveryStatus.Delivered)
+                    .ToArrayAsync();
+                Assert.Equal(2, deliveredMessages.Length);
+                Assert.All(
+                    deliveredMessages,
+                    message => Assert.Empty(message.RecipientAddress));
+            }
+
+            var failedBooking = await BookAsync(
+                options,
+                organization.Id,
+                practitioner.Id,
+                Guid.NewGuid(),
+                localDate.AddDays(7),
+                startTime: "09:00");
+            Assert.Equal(AppointmentBookingError.None, failedBooking.Error);
+            Assert.NotNull(failedBooking.Appointment);
+            var failedAppointmentId = failedBooking.Appointment.Id;
+            var failingEmailSender = new RecordingEmailSender(failDelivery: true);
+            await using (var database = new AgendaDbContext(options))
+            {
+                var processor = new AppointmentNotificationProcessor(
+                    database,
+                    failingEmailSender,
+                    TimeProvider.System,
+                    NullLogger<AppointmentNotificationProcessor>.Instance);
+                Assert.True(await processor.ProcessNextAsync(CancellationToken.None));
+            }
+
+            await using (var database = new AgendaDbContext(options))
+            {
+                var retryingMessage = await database.AppointmentNotificationOutboxMessages
+                    .SingleAsync(item =>
+                        item.AppointmentId == failedAppointmentId &&
+                        item.AttemptCount == 1);
+                Assert.Equal(AppointmentNotificationDeliveryStatus.Pending, retryingMessage.Status);
+                Assert.Equal("provider-failure", retryingMessage.LastFailureCode);
+                Assert.True(retryingMessage.NextAttemptAtUtc > DateTimeOffset.UtcNow);
+                Assert.True(await database.Appointments.AnyAsync(
+                    item => item.Id == failedAppointmentId));
+            }
+
+            DateTimeOffset secretaryReminderAtUtc;
+            Guid secretaryReminderMessageId;
+            await using (var database = new AgendaDbContext(options))
+            {
+                var reminder = await database.AppointmentNotificationOutboxMessages
+                    .SingleAsync(item =>
+                        item.AppointmentId == secretaryAppointmentId &&
+                        item.Kind == AppointmentNotificationKind.Reminder24Hours);
+                secretaryReminderAtUtc = reminder.NextAttemptAtUtc;
+                secretaryReminderMessageId = reminder.Id;
+            }
+
+            var reminderEmailSender = new RecordingEmailSender();
+            await using (var database = new AgendaDbContext(options))
+            {
+                var processor = new AppointmentNotificationProcessor(
+                    database,
+                    reminderEmailSender,
+                    new FixedTimeProvider(secretaryReminderAtUtc.AddMinutes(1)),
+                    NullLogger<AppointmentNotificationProcessor>.Instance);
+                var processedCount = 0;
+                while (await processor.ProcessNextAsync(CancellationToken.None))
+                {
+                    processedCount++;
+                    Assert.True(processedCount <= 10);
+                }
+            }
+
+            Assert.Contains(
+                reminderEmailSender.Messages,
+                message => message.MessageId == $"{secretaryReminderMessageId:N}@agenda-medica.local" &&
+                    message.Subject == "Recordatorio de tu cita");
+            await using (var database = new AgendaDbContext(options))
+            {
+                var sentReminder = await database.AppointmentNotificationOutboxMessages
+                    .SingleAsync(item => item.Id == secretaryReminderMessageId);
+                Assert.Equal(AppointmentNotificationDeliveryStatus.Delivered, sentReminder.Status);
+            }
+
+            DateTimeOffset failedReminderAtUtc;
+            Guid failedReminderMessageId;
+            await using (var database = new AgendaDbContext(options))
+            {
+                var appointment = await database.Appointments.SingleAsync(
+                    item => item.Id == failedAppointmentId);
+                appointment.ChangeStatus(AppointmentStatus.Cancelled);
+                var changedAtUtc = DateTimeOffset.UtcNow;
+                var cancellationEvent = AppointmentAuditEvent.Create(
+                    organization.Id,
+                    appointment.Id,
+                    practitioner.Id,
+                    AppointmentStatus.Requested,
+                    AppointmentStatus.Cancelled,
+                    changedAtUtc);
+                database.AppointmentAuditEvents.Add(cancellationEvent);
+                database.AppointmentNotificationOutboxMessages.AddRange(
+                    AppointmentNotificationOutboxMessage.CreateForEvent(
+                        appointment,
+                        cancellationEvent,
+                        practitioner.Email,
+                        changedAtUtc));
+                await database.SaveChangesAsync();
+
+                var reminder = await database.AppointmentNotificationOutboxMessages
+                    .SingleAsync(item =>
+                        item.AppointmentId == failedAppointmentId &&
+                        item.Kind == AppointmentNotificationKind.Reminder24Hours);
+                failedReminderAtUtc = reminder.NextAttemptAtUtc;
+                failedReminderMessageId = reminder.Id;
+            }
+
+            var delayedEmailSender = new RecordingEmailSender();
+            await using (var database = new AgendaDbContext(options))
+            {
+                var processor = new AppointmentNotificationProcessor(
+                    database,
+                    delayedEmailSender,
+                    new FixedTimeProvider(failedReminderAtUtc.AddMinutes(1)),
+                    NullLogger<AppointmentNotificationProcessor>.Instance);
+                var processedCount = 0;
+                while (await processor.ProcessNextAsync(CancellationToken.None))
+                {
+                    processedCount++;
+                    Assert.True(processedCount <= 10);
+                }
+            }
+
+            Assert.DoesNotContain(
+                delayedEmailSender.Messages,
+                message => message.MessageId == $"{failedReminderMessageId:N}@agenda-medica.local");
+            await using (var database = new AgendaDbContext(options))
+            {
+                var skippedReminder = await database.AppointmentNotificationOutboxMessages
+                    .SingleAsync(item => item.Id == failedReminderMessageId);
+                Assert.Equal(AppointmentNotificationDeliveryStatus.Skipped, skippedReminder.Status);
+                Assert.Equal("appointment-inactive", skippedReminder.LastFailureCode);
+                Assert.Empty(skippedReminder.RecipientAddress);
             }
 
             var firstKey = Guid.NewGuid();
@@ -415,5 +602,36 @@ public sealed class AppointmentBookingIntegrationTests
         command.CommandText =
             $"ALTER DATABASE [{databaseName}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{databaseName}]";
         await command.ExecuteNonQueryAsync();
+    }
+
+    private sealed class RecordingEmailSender : IEmailSender
+    {
+        private readonly bool failDelivery;
+
+        public RecordingEmailSender(bool failDelivery = false)
+        {
+            this.failDelivery = failDelivery;
+        }
+
+        public List<EmailMessage> Messages { get; } = [];
+
+        public Task SendAsync(
+            EmailMessage message,
+            CancellationToken cancellationToken = default)
+        {
+            Messages.Add(message);
+            if (failDelivery)
+            {
+                throw new EmailDeliveryException();
+            }
+
+            return Task.CompletedTask;
+        }
+
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }

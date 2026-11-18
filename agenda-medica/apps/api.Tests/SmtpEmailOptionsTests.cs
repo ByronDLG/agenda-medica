@@ -74,12 +74,13 @@ public sealed class SmtpEmailOptionsTests
         var sender = new MailKitEmailSender(
             Options.Create(new SmtpEmailOptions()));
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        var exception = await Assert.ThrowsAsync<EmailDeliveryException>(() =>
             sender.SendAsync(new EmailMessage(
                 "recipient@example.test",
                 "Subject",
                 "Message")));
 
         Assert.Contains("disabled", exception.Message);
+        Assert.Equal("smtp-disabled", exception.FailureCode);
     }
 }
